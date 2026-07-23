@@ -1,0 +1,27 @@
+CONTEXTS = ["cafe", "hospital", "college", "bank"]
+DEFAULT_CONTEXT = "cafe"
+
+CONTEXT_PREFIX = {
+    "cafe": "Cafe request",
+    "hospital": "Hospital request",
+    "college": "College request",
+    "bank": "Bank request",
+}
+
+RECOGNITION_THRESHOLD = 0.40
+SPEECH_COOLDOWN_SECONDS = 2.0
+
+AUTO_TRAINING_ENABLED = True
+AUTO_GESTURE_PREFIX = "Auto Gesture"
+AUTO_STABILITY_THRESHOLD = 0.08
+AUTO_STABLE_FRAMES = 18
+AUTO_TRAIN_COOLDOWN_SECONDS = 3.0
+AUTO_MATCH_DISTANCE = 0.18
+
+CAMERA_INDEX = 0
+MAX_NUM_HANDS = 1
+MIN_DETECTION_CONFIDENCE = 0.6
+MIN_TRACKING_CONFIDENCE = 0.6
+
+EYE_MOVEMENT_THRESHOLD = 0.15
+EYE_BLINK_THRESHOLD = 0.18

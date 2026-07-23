@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GestureTalk - Speak with a Wave</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="container">
+    <section class="workspace">
+      <header class="app-header">
+        <div>
+          <h1>GestureTalk</h1>
+          <p class="subtitle">Automatic hand gesture and eye movement speech assistant.</p>
+        </div>
+        <div class="pill" id="learningPill">Auto learning on</div>
+      </header>
+
+      <div class="video-wrap">
+        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Live camera feed" />
+      </div>
+
+      <div class="command-bar">
+        <button id="autoTrainBtn" class="btn-primary" aria-pressed="true">Pause Auto Training</button>
+        <button id="trainBtn" class="btn-secondary">Name Current Gesture</button>
+      </div>
+
+      <div class="contexts" id="contextButtons">
+        {% for ctx in contexts %}
+        <button class="btn-context" data-context="{{ ctx }}">{{ ctx|capitalize }}</button>
+        {% endfor %}
+      </div>
+
+      <p id="errorBox" class="error"></p>
+    </section>
+
+    <aside class="status-panel">
+      <h2>Live Status</h2>
+
+      <div class="phrase-card">
+        <div class="label">Spoken Text</div>
+        <div class="phrase" id="phraseValue">-</div>
+      </div>
+
+      <div class="metric-grid">
+        <div class="metric">
+          <div class="label">Context</div>
+          <div class="value" id="contextValue">-</div>
+        </div>
+        <div class="metric">
+          <div class="label">Hand Gesture</div>
+          <div class="value" id="gestureValue">-</div>
+        </div>
+        <div class="metric">
+          <div class="label">Eye Movement</div>
+          <div class="value" id="eyeValue">-</div>
+        </div>
+        <div class="metric">
+          <div class="label">Learned</div>
+          <div class="value" id="learnedCount">0</div>
+        </div>
+      </div>
+
+      <div class="training-card">
+        <div class="label">Auto Training</div>
+        <div class="value" id="trainingStatus">-</div>
+      </div>
+
+      <div class="gesture-list-wrap">
+        <div class="label">Learned Gestures</div>
+        <div class="gesture-list" id="gestureList">No gestures learned yet</div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

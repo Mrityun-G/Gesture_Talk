@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Eye Communication System</title>
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="compose-panel">
+        <div class="topbar">
+          <div>
+            <p class="eyebrow">Eye Communication</p>
+            <h1>No-hand speech board</h1>
+          </div>
+          <div class="status" id="status">Starting camera...</div>
+        </div>
+
+        <textarea id="message" aria-label="Message" readonly placeholder="Selected words will appear here"></textarea>
+
+        <div class="quick-actions" id="quickActions"></div>
+
+        <div class="board" id="board" aria-label="Eye selection board"></div>
+      </section>
+
+      <aside class="control-panel">
+        <h2>Automatic setup</h2>
+        <p>
+          Look naturally at the highlighted dots. The system collects gaze data by itself,
+          then keeps improving while you use the board.
+        </p>
+
+        <div class="meter">
+          <span>Calibration</span>
+          <strong id="calibrationCount">0 / 9</strong>
+        </div>
+        <div class="progress"><div id="progressBar"></div></div>
+
+        <button id="startCalibration" type="button">Auto calibrate</button>
+        <button id="speak" type="button">Speak message</button>
+        <button id="clear" type="button">Clear message</button>
+        <button id="exportData" type="button">Export gaze data</button>
+
+        <label class="setting">
+          Dwell select time
+          <input id="dwellTime" type="range" min="700" max="2200" step="100" value="1200">
+          <span id="dwellLabel">1.2s</span>
+        </label>
+
+        <div class="hint">
+          Selection happens when the user keeps looking at one tile. No hand input is
+          needed after the first camera permission.
+        </div>
+      </aside>
+    </main>
+
+    <div class="calibration-target hidden" id="calibrationTarget"></div>
+    <div class="gaze-dot" id="gazeDot"></div>
+  </body>
+</html>
