@@ -228,42 +228,76 @@ class CameraProcessor:
             return "need water"
         if fingers["index"] and fingers["middle"] and not fingers["ring"] and not fingers["pinky"]:
             return "thank you"
-        return "none"
-
+class Camera:
     def _detect_eye_movement(self, face_results, frame: np.ndarray) -> Tuple[str, str]:
         if not face_results or not face_results.multi_face_landmarks:
             return "not detected", "Eyes not detected"
-
-        landmarks = face_results.multi_face_landmarks[0].landmark
-        h, w = frame.shape[:2]
-
+        
+        try:
+            landmarks = self._get_eye_landmarks(face_results)
+            h, w = frame.shape[:2]
+            
+            left_corner, right_corner, upper_lid, lower_lid = self._get_eye_corners(landmarks)
+            iris_points = self._get_iris_points(landmarks)
+            
+            self._draw_eye_circles(frame, landmarks, w, h)
+            
+            eye_width, eye_height = self._calculate_eye_dimensions(left_corner, right_corner, upper_lid, lower_lid)
+            blink_ratio = eye_height / eye_width
+            
+            if blink_ratio < EYE_BLINK_THRESHOLD:
+                return "blink", "Blink detected"
+            
+            iris_x, iris_y = self._calculate_iris_position(iris_points, left_corner, right_corner, upper_lid, lower_lid)
+            self._draw_iris_circle(frame, iris_x, iris_y, w, h)
+            
+            horizontal, vertical = self._calculate_eye_movement(iris_x, iris_y, left_corner, upper_lid, eye_width, eye_height)
+            
+            return self._determine_eye_movement(horizontal, vertical)
+        except Exception as e:
+            return "error", str(e)
+        
+    def _get_eye_landmarks(self, face_results) -> List[Landmark]:
+        return face_results.multi_face_landmarks[0].landmark
+    
+    def _get_eye_corners(self, landmarks) -> Tuple[Landmark, Landmark, Landmark, Landmark]:
         left_corner = landmarks[33]
         right_corner = landmarks[133]
         upper_lid = landmarks[159]
         lower_lid = landmarks[145]
-        iris_points = landmarks[468:473] if len(landmarks) > 472 else []
-
+        return left_corner, right_corner, upper_lid, lower_lid
+    
+    def _get_iris_points(self, landmarks) -> List[Landmark]:
+        return landmarks[468:473] if len(landmarks) > 472 else []
+    
+    def _draw_eye_circles(self, frame, landmarks, w, h) -> None:
+        left_corner, right_corner, upper_lid, lower_lid = self._get_eye_corners(landmarks)
         for point in (left_corner, right_corner, upper_lid, lower_lid):
             cv2.circle(frame, (int(point.x * w), int(point.y * h)), 2, (56, 189, 248), -1)
-
+        
+    def _calculate_eye_dimensions(self, left_corner, right_corner, upper_lid, lower_lid) -> Tuple[float, float]:
         eye_width = max(abs(right_corner.x - left_corner.x), 1e-6)
         eye_height = max(abs(lower_lid.y - upper_lid.y), 1e-6)
-        blink_ratio = eye_height / eye_width
-
-        if blink_ratio < EYE_BLINK_THRESHOLD:
-            return "blink", "Blink detected"
-
+        return eye_width, eye_height
+    
+    def _calculate_iris_position(self, iris_points, left_corner, right_corner, upper_lid, lower_lid) -> Tuple[float, float]:
         if iris_points:
             iris_x = float(np.mean([point.x for point in iris_points]))
             iris_y = float(np.mean([point.y for point in iris_points]))
         else:
             iris_x = (left_corner.x + right_corner.x) / 2.0
             iris_y = (upper_lid.y + lower_lid.y) / 2.0
-
+        return iris_x, iris_y
+    
+    def _draw_iris_circle(self, frame, iris_x, iris_y, w, h) -> None:
         cv2.circle(frame, (int(iris_x * w), int(iris_y * h)), 3, (34, 197, 94), -1)
+        
+    def _calculate_eye_movement(self, iris_x, iris_y, left_corner, upper_lid, eye_width, eye_height) -> Tuple[float, float]:
         horizontal = ((iris_x - left_corner.x) / eye_width) - 0.5
         vertical = ((iris_y - upper_lid.y) / eye_height) - 0.5
-
+        return horizontal, vertical
+    
+    def _determine_eye_movement(self, horizontal, vertical) -> Tuple[str, str]:
         if horizontal < -EYE_MOVEMENT_THRESHOLD:
             return "look left", "Looking left"
         if horizontal > EYE_MOVEMENT_THRESHOLD:
@@ -272,10 +306,7 @@ class CameraProcessor:
             return "look up", "Looking up"
         if vertical > EYE_MOVEMENT_THRESHOLD:
             return "look down", "Looking down"
-        return "center", "Looking center"
-
-    def _draw_status_overlay(self, frame: np.ndarray, gesture: str, eye_movement: str) -> None:
-        cv2.rectangle(frame, (12, 12), (360, 84), (15, 23, 42), -1)
+        return "center", "Looking center"        cv2.rectangle(frame, (12, 12), (360, 84), (15, 23, 42), -1)
         cv2.putText(frame, f"Hand: {gesture}", (24, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (229, 231, 235), 2)
         cv2.putText(frame, f"Eyes: {eye_movement}", (24, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (186, 230, 253), 2)
 
