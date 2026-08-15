@@ -56,39 +56,60 @@ def phrase_for(gesture_name: str, context_name: str) -> str:
     return context_map.get(context_name, {}).get(
         gesture_name,
         common_map.get(gesture_name, gesture_name),
-    )
+import asyncio
+import logging
 
-def recognition_state_loop():
+# Create a logger for error handling
+logging.basicConfig(level=logging.ERROR)
+
+async def get_recognition_data(camera):
+    # Extract recognition data into a separate async function
+    try:
+        gesture_name, _ = await camera.get_recognition_async()
+        eye_movement, eye_phrase = await camera.get_eye_movement_async()
+        return gesture_name, eye_movement, eye_phrase
+    except Exception as e:
+        logging.error(f"Error getting recognition data: {e}")
+        return None, None, None
+
+async def update_state(state, state_lock, gesture_name, eye_movement, eye_phrase, context_name):
+    # Update state in a separate async function with proper locking
+    async with state_lock:
+        if gesture_name == "none":
+            phrase = eye_phrase if eye_movement not in ("center", "not detected") else "Waiting for gesture..."
+        else:
+            phrase = phrase_for(gesture_name, context_name)
+
+        state["gesture"] = gesture_name
+        state["eye_movement"] = eye_movement
+        state["eye_phrase"] = eye_phrase
+        state["phrase"] = phrase
+
+async def speak(tts, phrase, speech_key):
+    # Extract speech into a separate async function
+    try:
+        await tts.try_speak_async(phrase, speech_key)
+    except Exception as e:
+        logging.error(f"Error speaking: {e}")
+
+async def recognition_state_loop(camera, state, state_lock, tts):
+    # Convert the loop to an async function
     while True:
-        try:
-            gesture_name, _ = camera.get_recognition()
-            eye_movement, eye_phrase = camera.get_eye_movement()
+        gesture_name, eye_movement, eye_phrase = await get_recognition_data(camera)
+        if gesture_name is None or eye_movement is None or eye_phrase is None:
+            continue  # Skip if data is invalid
 
-            with state_lock:
-                context_name = state["context"]
-                if gesture_name == "none":
-                    phrase = eye_phrase if eye_movement not in ("center", "not detected") else "Waiting for gesture..."
-                else:
-                    phrase = phrase_for(gesture_name, context_name)
+        context_name = state["context"]
+        await update_state(state, state_lock, gesture_name, eye_movement, eye_phrase, context_name)
 
-                state["gesture"] = gesture_name
-                state["eye_movement"] = eye_movement
-                state["eye_phrase"] = eye_phrase
-                state["phrase"] = phrase
+        if gesture_name != "none":
+            speech_key = f"{context_name}:{gesture_name}"
+            await speak(tts, state["phrase"], speech_key)
+        elif eye_movement not in ("center", "not detected"):
+            speech_key = f"eye:{eye_movement}"
+            await speak(tts, eye_phrase, speech_key)
 
-            if gesture_name != "none":
-                speech_key = f"{context_name}:{gesture_name}"
-                tts.try_speak(phrase, speech_key)
-            elif eye_movement not in ("center", "not detected"):
-                speech_key = f"eye:{eye_movement}"
-                tts.try_speak(eye_phrase, speech_key)
-        except Exception as e:
-            print(f"Recognition loop error: {e}")
-        
-        time.sleep(0.1)
-
-
-@app.route("/")
+        await asyncio.sleep(0.1)  # Use async sleep@app.route("/")
 def index():
     return render_template("index.html", contexts=CONTEXTS)
 
