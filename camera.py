@@ -74,68 +74,94 @@ class CameraProcessor:
         self._auto_candidate: Optional[np.ndarray] = None
         self._auto_stable_frames = 0
         self._auto_gesture_count = 0
-        self._last_auto_train_time = 0.0
+import asyncio
+from typing import Optional
+import numpy as np
+import cv2
+import time
 
-    def process_camera_loop(self):
-        while True:
-            try:
-                ok, frame = self.cap.read()
-                if not ok:
-                    time.sleep(0.1)
-                    continue
+# Extracted method to handle frame processing
+async def process_frame(self, frame: np.ndarray) -> tuple:
+    # Convert frame to RGB
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                frame = cv2.flip(frame, 1)
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # Process hands and face mesh
+    results = self.hands.process(rgb)
+    face_results = self.face_mesh.process(rgb)
 
-                results = self.hands.process(rgb)
-                face_results = self.face_mesh.process(rgb)
-                annotated = frame.copy()
+    # Initialize variables
+    detected_name = "none"
+    detected_landmarks = None
+    detected_dist = None
+    eye_movement, eye_phrase = self._detect_eye_movement(face_results, frame.copy())
 
-                detected_name = "none"
-                detected_landmarks = None
-                detected_dist = None
-                eye_movement, eye_phrase = self._detect_eye_movement(face_results, annotated)
+    # Check for hand landmarks
+    if results and results.multi_hand_landmarks:
+        hand_landmarks = results.multi_hand_landmarks[0]
+        detected_landmarks = normalize_landmarks(hand_landmarks)
 
-                if results and results.multi_hand_landmarks:
-                    hand_landmarks = results.multi_hand_landmarks[0]
-                    detected_landmarks = normalize_landmarks(hand_landmarks)
+        # Draw landmarks on annotated frame
+        annotated = frame.copy()
+        self.mp_drawing.draw_landmarks(
+            annotated,
+            hand_landmarks,
+            self.mp_hands.HAND_CONNECTIONS,
+        )
 
-                    self.mp_drawing.draw_landmarks(
-                        annotated,
-                        hand_landmarks,
-                        self.mp_hands.HAND_CONNECTIONS,
-                    )
+        # Classify hand pose and match with stored gestures
+        auto_name = self._classify_common_hand_pose(hand_landmarks)
+        match_name, match_dist = self.gesture_store.match(
+            detected_landmarks, RECOGNITION_THRESHOLD
+        )
 
-                    auto_name = self._classify_common_hand_pose(hand_landmarks)
-                    match_name, match_dist = self.gesture_store.match(
-                        detected_landmarks, RECOGNITION_THRESHOLD
-                    )
+        detected_name = auto_name if auto_name != "none" else match_name
+        detected_dist = match_dist
+        self._auto_train_if_stable(detected_landmarks, match_name, match_dist)
+    else:
+        self._auto_candidate = None
+        self._auto_stable_frames = 0
+        self.auto_training_status = "Show your hand to auto-learn a gesture"
 
-                    detected_name = auto_name if auto_name != "none" else match_name
-                    detected_dist = match_dist
-                    self._auto_train_if_stable(detected_landmarks, match_name, match_dist)
-                else:
-                    self._auto_candidate = None
-                    self._auto_stable_frames = 0
-                    self.auto_training_status = "Show your hand to auto-learn a gesture"
+    # Draw status overlay
+    annotated = frame.copy()
+    self._draw_status_overlay(annotated, detected_name, eye_movement)
 
-                self._draw_status_overlay(annotated, detected_name, eye_movement)
+    return annotated, detected_landmarks, detected_name, detected_dist, eye_movement, eye_phrase
 
-                with self.lock:
-                    self.latest_annotated_frame = annotated
-                    self.latest_landmarks = detected_landmarks
-                    self.detected_gesture = detected_name
-                    self.match_distance = detected_dist
-                    self.eye_movement = eye_movement
-                    self.eye_phrase = eye_phrase
+# Extracted method to handle camera loop
+async def process_camera_loop(self):
+    while True:
+        try:
+            # Read frame from camera
+            ok, frame = self.cap.read()
+            if not ok:
+                await asyncio.sleep(0.1)  # Use async sleep
+                continue
 
-            except Exception as e:
-                print(f"Camera Loop Error: {e}")
+            # Flip and process frame
+            frame = cv2.flip(frame, 1)
+            annotated, detected_landmarks, detected_name, detected_dist, eye_movement, eye_phrase = await self.process_frame(frame)
 
-            time.sleep(0.01)
+            # Update latest frame and landmarks
+            with self.lock:
+                self.latest_annotated_frame = annotated
+                self.latest_landmarks = detected_landmarks
+                self.detected_gesture = detected_name
+                self.match_distance = detected_dist
+                self.eye_movement = eye_movement
+                self.eye_phrase = eye_phrase
 
-    def get_latest_landmarks(self) -> Optional[np.ndarray]:
-        with self.lock:
+        except Exception as e:
+            # Handle exception and log error
+            print(f"Camera Loop Error: {e}")
+
+        # Use async sleep to reduce CPU usage
+        await asyncio.sleep(0.01)
+
+# Modified method to get latest landmarks
+async def get_latest_landmarks(self) -> Optional[np.ndarray]:
+    # Return latest landmarks
+    return self.latest_landmarks        with self.lock:
             return None if self.latest_landmarks is None else self.latest_landmarks.copy()
 
     def get_recognition(self) -> Tuple[str, Optional[float]]:
