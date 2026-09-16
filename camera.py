@@ -28,7 +28,6 @@ class CameraProcessor:
     def __init__(self, gesture_store: GestureStore):
         self.gesture_store = gesture_store
 
-        # ✅ SAFE mediapipe handling
         try:
             self.mp_hands = mp.solutions.hands
             self.mp_face_mesh = mp.solutions.face_mesh
@@ -55,7 +54,6 @@ class CameraProcessor:
                 "This code will NOT work properly on Python 3.12."
             )
 
-        # ✅ FIX: better webcam handling for Windows
         self.cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
 
         if not self.cap.isOpened():
@@ -74,94 +72,83 @@ class CameraProcessor:
         self._auto_candidate: Optional[np.ndarray] = None
         self._auto_stable_frames = 0
         self._auto_gesture_count = 0
-import asyncio
-from typing import Optional
-import numpy as np
-import cv2
-import time
+        self._last_auto_train_time = 0.0
 
-# Extracted method to handle frame processing
-async def process_frame(self, frame: np.ndarray) -> tuple:
-    # Convert frame to RGB
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    def process_frame(self, frame: np.ndarray):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(rgb)
+        face_results = self.face_mesh.process(rgb)
 
-    # Process hands and face mesh
-    results = self.hands.process(rgb)
-    face_results = self.face_mesh.process(rgb)
-
-    # Initialize variables
-    detected_name = "none"
-    detected_landmarks = None
-    detected_dist = None
-    eye_movement, eye_phrase = self._detect_eye_movement(face_results, frame.copy())
-
-    # Check for hand landmarks
-    if results and results.multi_hand_landmarks:
-        hand_landmarks = results.multi_hand_landmarks[0]
-        detected_landmarks = normalize_landmarks(hand_landmarks)
-
-        # Draw landmarks on annotated frame
+        detected_name = "none"
+        detected_landmarks = None
+        detected_dist = None
+        eye_movement, eye_phrase = self._detect_eye_movement(face_results, frame.copy())
         annotated = frame.copy()
-        self.mp_drawing.draw_landmarks(
+
+        if results and results.multi_hand_landmarks:
+            hand_landmarks = results.multi_hand_landmarks[0]
+            detected_landmarks = normalize_landmarks(hand_landmarks)
+            self.mp_drawing.draw_landmarks(
+                annotated,
+                hand_landmarks,
+                self.mp_hands.HAND_CONNECTIONS,
+            )
+
+            auto_name = self._classify_common_hand_pose(hand_landmarks)
+            match_name, match_dist = self.gesture_store.match(
+                detected_landmarks, RECOGNITION_THRESHOLD
+            )
+
+            detected_name = auto_name if auto_name != "none" else match_name
+            detected_dist = match_dist
+            self._auto_train_if_stable(detected_landmarks, match_name, match_dist)
+        else:
+            self._auto_candidate = None
+            self._auto_stable_frames = 0
+            self.auto_training_status = "Show your hand to auto-learn a gesture"
+
+        self._draw_status_overlay(annotated, detected_name, eye_movement)
+        return (
             annotated,
-            hand_landmarks,
-            self.mp_hands.HAND_CONNECTIONS,
+            detected_landmarks,
+            detected_name,
+            detected_dist,
+            eye_movement,
+            eye_phrase,
         )
 
-        # Classify hand pose and match with stored gestures
-        auto_name = self._classify_common_hand_pose(hand_landmarks)
-        match_name, match_dist = self.gesture_store.match(
-            detected_landmarks, RECOGNITION_THRESHOLD
-        )
+    def process_camera_loop(self):
+        while True:
+            try:
+                ok, frame = self.cap.read()
+                if not ok:
+                    time.sleep(0.1)
+                    continue
 
-        detected_name = auto_name if auto_name != "none" else match_name
-        detected_dist = match_dist
-        self._auto_train_if_stable(detected_landmarks, match_name, match_dist)
-    else:
-        self._auto_candidate = None
-        self._auto_stable_frames = 0
-        self.auto_training_status = "Show your hand to auto-learn a gesture"
+                frame = cv2.flip(frame, 1)
+                (
+                    annotated,
+                    detected_landmarks,
+                    detected_name,
+                    detected_dist,
+                    eye_movement,
+                    eye_phrase,
+                ) = self.process_frame(frame)
 
-    # Draw status overlay
-    annotated = frame.copy()
-    self._draw_status_overlay(annotated, detected_name, eye_movement)
+                with self.lock:
+                    self.latest_annotated_frame = annotated
+                    self.latest_landmarks = detected_landmarks
+                    self.detected_gesture = detected_name
+                    self.match_distance = detected_dist
+                    self.eye_movement = eye_movement
+                    self.eye_phrase = eye_phrase
+            except Exception as e:
+                print(f"Camera Loop Error: {e}")
 
-    return annotated, detected_landmarks, detected_name, detected_dist, eye_movement, eye_phrase
+            time.sleep(0.01)
 
-# Extracted method to handle camera loop
-async def process_camera_loop(self):
-    while True:
-        try:
-            # Read frame from camera
-            ok, frame = self.cap.read()
-            if not ok:
-                await asyncio.sleep(0.1)  # Use async sleep
-                continue
-
-            # Flip and process frame
-            frame = cv2.flip(frame, 1)
-            annotated, detected_landmarks, detected_name, detected_dist, eye_movement, eye_phrase = await self.process_frame(frame)
-
-            # Update latest frame and landmarks
-            with self.lock:
-                self.latest_annotated_frame = annotated
-                self.latest_landmarks = detected_landmarks
-                self.detected_gesture = detected_name
-                self.match_distance = detected_dist
-                self.eye_movement = eye_movement
-                self.eye_phrase = eye_phrase
-
-        except Exception as e:
-            # Handle exception and log error
-            print(f"Camera Loop Error: {e}")
-
-        # Use async sleep to reduce CPU usage
-        await asyncio.sleep(0.01)
-
-# Modified method to get latest landmarks
-async def get_latest_landmarks(self) -> Optional[np.ndarray]:
-    # Return latest landmarks
-    return self.latest_landmarks        with self.lock:
+    def get_latest_landmarks(self) -> Optional[np.ndarray]:
+        with self.lock:
             return None if self.latest_landmarks is None else self.latest_landmarks.copy()
 
     def get_recognition(self) -> Tuple[str, Optional[float]]:
@@ -218,7 +205,9 @@ async def get_latest_landmarks(self) -> Optional[np.ndarray]:
             self._auto_stable_frames = 1
 
         if self._auto_stable_frames < AUTO_STABLE_FRAMES:
-            self.auto_training_status = f"Learning stable pose {self._auto_stable_frames}/{AUTO_STABLE_FRAMES}"
+            self.auto_training_status = (
+                f"Learning stable pose {self._auto_stable_frames}/{AUTO_STABLE_FRAMES}"
+            )
             return
 
         now = time.time()
@@ -248,21 +237,21 @@ async def get_latest_landmarks(self) -> Optional[np.ndarray]:
             return "hello"
         if raised == 0:
             return "need help"
-        if fingers["thumb"] and not any(fingers[name] for name in ("index", "middle", "ring", "pinky")):
+        if fingers["thumb"] and not any(
+            fingers[name] for name in ("index", "middle", "ring", "pinky")
+        ):
             return "yes"
         if fingers["index"] and not any(fingers[name] for name in ("middle", "ring", "pinky")):
             return "need water"
         if fingers["index"] and fingers["middle"] and not fingers["ring"] and not fingers["pinky"]:
             return "thank you"
-import numpy as np
-import cv2
-from typing import Tuple
+        return "none"
 
-class Camera:
     def _detect_eye_movement(self, face_results, frame: np.ndarray) -> Tuple[str, str]:
         try:
             if not face_results or not face_results.multi_face_landmarks:
                 return "not detected", "Eyes not detected"
+
             landmarks = face_results.multi_face_landmarks[0].landmark
             h, w = frame.shape[:2]
             left_corner = landmarks[33]
@@ -271,17 +260,35 @@ class Camera:
             lower_lid = landmarks[145]
             iris_points = landmarks[468:473] if len(landmarks) > 472 else []
             self._draw_eye_landmarks(frame, landmarks, h, w)
+
             eye_width = max(abs(right_corner.x - left_corner.x), 1e-6)
             eye_height = max(abs(lower_lid.y - upper_lid.y), 1e-6)
             blink_ratio = eye_height / eye_width
+
             if blink_ratio < EYE_BLINK_THRESHOLD:
                 return "blink", "Blink detected"
-            iris_x, iris_y = self._calculate_iris_position(iris_points, left_corner, right_corner, upper_lid, lower_lid)
+
+            iris_x, iris_y = self._calculate_iris_position(
+                iris_points,
+                left_corner,
+                right_corner,
+                upper_lid,
+                lower_lid,
+            )
             cv2.circle(frame, (int(iris_x * w), int(iris_y * h)), 3, (34, 197, 94), -1)
-            horizontal, vertical = self._calculate_eye_movement(iris_x, iris_y, left_corner, upper_lid, eye_width, eye_height)
+
+            horizontal, vertical = self._calculate_eye_movement(
+                iris_x,
+                iris_y,
+                left_corner,
+                upper_lid,
+                eye_width,
+                eye_height,
+            )
             return self._determine_eye_movement(horizontal, vertical)
         except Exception as e:
             return "error", str(e)
+
     def _draw_eye_landmarks(self, frame: np.ndarray, landmarks, h, w):
         left_corner = landmarks[33]
         right_corner = landmarks[133]
@@ -289,7 +296,15 @@ class Camera:
         lower_lid = landmarks[145]
         for point in (left_corner, right_corner, upper_lid, lower_lid):
             cv2.circle(frame, (int(point.x * w), int(point.y * h)), 2, (56, 189, 248), -1)
-    def _calculate_iris_position(self, iris_points, left_corner, right_corner, upper_lid, lower_lid):
+
+    def _calculate_iris_position(
+        self,
+        iris_points,
+        left_corner,
+        right_corner,
+        upper_lid,
+        lower_lid,
+    ):
         if iris_points:
             iris_x = float(np.mean([point.x for point in iris_points]))
             iris_y = float(np.mean([point.y for point in iris_points]))
@@ -297,10 +312,20 @@ class Camera:
             iris_x = (left_corner.x + right_corner.x) / 2.0
             iris_y = (upper_lid.y + lower_lid.y) / 2.0
         return iris_x, iris_y
-    def _calculate_eye_movement(self, iris_x, iris_y, left_corner, upper_lid, eye_width, eye_height):
+
+    def _calculate_eye_movement(
+        self,
+        iris_x,
+        iris_y,
+        left_corner,
+        upper_lid,
+        eye_width,
+        eye_height,
+    ):
         horizontal = ((iris_x - left_corner.x) / eye_width) - 0.5
         vertical = ((iris_y - upper_lid.y) / eye_height) - 0.5
         return horizontal, vertical
+
     def _determine_eye_movement(self, horizontal, vertical):
         if horizontal < -EYE_MOVEMENT_THRESHOLD:
             return "look left", "Looking left"
@@ -311,26 +336,46 @@ class Camera:
         if vertical > EYE_MOVEMENT_THRESHOLD:
             return "look down", "Looking down"
         return "center", "Looking center"
+
     def _draw_status_overlay(self, frame: np.ndarray, gesture: str, eye_movement: str) -> None:
-        # draw status overlay logic here
         cv2.rectangle(frame, (12, 12), (360, 84), (15, 23, 42), -1)
-        cv2.putText(frame, f"Hand: {gesture}", (24, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (229, 231, 235), 2)
-        cv2.putText(frame, f"Eyes: {eye_movement}", (24, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (186, 230, 253), 2)
+        cv2.putText(
+            frame,
+            f"Hand: {gesture}",
+            (24, 42),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            (229, 231, 235),
+            2,
+        )
+        cv2.putText(
+            frame,
+            f"Eyes: {eye_movement}",
+            (24, 70),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (186, 230, 253),
+            2,
+        )
 
     def generate_mjpeg_stream(self):
         while True:
             with self.lock:
-                frame = None if self.latest_annotated_frame is None else self.latest_annotated_frame.copy()
+                frame = (
+                    None
+                    if self.latest_annotated_frame is None
+                    else self.latest_annotated_frame.copy()
+                )
 
             if frame is None:
                 time.sleep(0.03)
                 continue
 
-            ok, buffer = cv2.imencode('.jpg', frame)
+            ok, buffer = cv2.imencode(".jpg", frame)
             if not ok:
                 continue
 
             yield (
-                b'--frame\r\n'
-                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n'
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
             )
